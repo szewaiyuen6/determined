@@ -1,0 +1,19 @@
+name: core-api-stage-3
+entrypoint: python3 train_3.py
+
+# NEW: configure a single "increment_by" hyperparameter
+hyperparameters:
+  lr:
+    type: double
+    minval: 0.0001
+    maxval: 0.005
+
+# NEW: use a non-trivial hyperparameter search.
+searcher:
+   name: single
+   metric: x
+   max_length:
+     records: 1000
+
+
+max_restarts: 0
