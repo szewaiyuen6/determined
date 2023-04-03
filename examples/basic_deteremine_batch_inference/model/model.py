@@ -1,6 +1,9 @@
+import os
+
 import torch.nn as nn
 import torch
 
+from determined.experimental import client
 from typing import Dict, Sequence, Union
 
 # Constants about the data set.
@@ -43,4 +46,11 @@ model = nn.Sequential(
 
 
 def get_model():
+    # This UUID is from determined UI
+    specific_checkpoint = client.get_checkpoint(uuid="6a5a641a-fe9e-49fe-9f96-2b5d6109709b")
+    checkpoint_path = specific_checkpoint.download()
+
+    model.load_state_dict(
+        torch.load(os.path.join(checkpoint_path, "state_dict.pth"))["models_state_dict"][0]
+    )
     return model
