@@ -18,7 +18,7 @@ class Flatten(nn.Module):
         assert len(args) == 1
         x = args[0]
         assert isinstance(x, torch.Tensor)
-        return x.contiguous().view(1, -1)
+        return x.contiguous().view(x.size(0), -1)
 
 
 model = nn.Sequential(

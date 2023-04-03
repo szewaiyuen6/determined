@@ -12,7 +12,6 @@ from typing import Optional
 
 import determined as det
 
-from determined.horovod import hvd
 from determined import core, gpu, horovod, profiler, pytorch
 
 from model.model import get_model
@@ -32,7 +31,15 @@ def load_state(checkpoint_directory):
 def run_inference(model, data_loader, core_context, rank, latest_checkpoint) -> int:
 
     model.eval()
+
     steps_completed = 0
+    records_processed = 0
+
+    # I set up my AWS cluster with file system, this is where the fs is mounted to my container
+    inference_output_dir = "/run/determined/workdir/shared_fs/inference_out/"
+    # The first worker will create it, and exist_ok option makes sure subsequent workers
+    # do not run into error
+    pathlib.Path.mkdir(pathlib.Path(inference_output_dir), parents=True, exist_ok=True)
 
     # Look for checkpoint of the inference job
     # If checkpoint exist, get number of steps completed
@@ -41,6 +48,7 @@ def run_inference(model, data_loader, core_context, rank, latest_checkpoint) -> 
         with core_context.checkpoint.restore_path(latest_checkpoint) as path:
             metadata = load_state(path)
             steps_completed = metadata["steps_completed"]
+            records_processed = metadata["records_processed"]
             print(f"Steps completed {steps_completed}")
 
     with torch.no_grad():
@@ -52,29 +60,29 @@ def run_inference(model, data_loader, core_context, rank, latest_checkpoint) -> 
 
             print(f"Working on batch is {batch}")
 
-            preds = []
-
-            for data_point in data:
-                output = model(data_point)
-                pred = output.argmax(
-                    dim=1, keepdim=True
-                )  # get the index of the max log-probability
-                preds.append(pred[0][0].item())
+            output = model(data)
+            preds = output.argmax(dim=1, keepdim=True)
 
             file_name = f"inference_out_{rank}_{batch}.json"
 
+            output = []
+
+            for pred in preds:
+                output.append(pred[0].item())
+
             with open(
-                os.path.join("/run/determined/workdir/shared_fs/inference_out/", f"{file_name}"),
+                os.path.join(inference_output_dir, f"{file_name}"),
                 "w",
             ) as f:
-                json.dump({"predictions": preds}, f)
+                json.dump({"predictions": output}, f)
 
             # After each batch, synchronize and update number of catches completed
             if core_context.distributed.rank == 0:
                 work_completed_this_round = sum(core_context.distributed.gather(len(data)))
+                records_processed += work_completed_this_round
                 checkpoint_metadata = {
                     "steps_completed": batch,
-                    "record_processed": work_completed_this_round,
+                    "records_processed": records_processed,
                 }
                 with core_context.checkpoint.store_path(checkpoint_metadata) as (path, uuid):
                     with open(os.path.join(path, "batch_completed.json"), "w") as file_obj:
@@ -112,28 +120,15 @@ def main(core_context):
 
 
 def _initialize_distributed_backend() -> Optional[core.DistributedContext]:
-    info = det.get_cluster_info()
-
-    distributed_backend = det._DistributedBackend()
-    if distributed_backend.use_horovod():
-        hvd.require_horovod_type("torch", "PyTorchTrial is in use.")
-        hvd.init()
-        return core.DistributedContext.from_horovod(horovod.hvd)
-    elif distributed_backend.use_torch():
-        if torch.cuda.is_available():
-            dist.init_process_group(
-                backend="nccl",
-            )  # type: ignore
-        else:
-            dist.init_process_group(backend="gloo")  # type: ignore
+    # Pytorch specific initialization
+    if torch.cuda.is_available():
+        dist.init_process_group(
+            backend="nccl",
+        )  # type: ignore
         return core.DistributedContext.from_torch_distributed()
-    elif info and (len(info.container_addrs) > 1 or len(info.slot_ids) > 1):
-        raise ValueError(
-            "In multi-slot managed cluster training, you must wrap your training script with a "
-            "distributed launch layer such as determined.launch.torch_distributed or "
-            "determined.launch.horovod."
-        )
-    return None
+    else:
+        dist.init_process_group(backend="gloo")  # type: ignore
+    return core.DistributedContext.from_torch_distributed()
 
 
 if __name__ == "__main__":

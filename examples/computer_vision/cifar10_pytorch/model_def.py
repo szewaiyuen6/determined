@@ -83,7 +83,8 @@ class CIFARTrial(PyTorchTrial):
     ) -> Dict[str, torch.Tensor]:
         batch = cast(Tuple[torch.Tensor, torch.Tensor], batch)
         data, labels = batch
-
+        print("data")
+        print(data.size())
         output = self.model(data)
         loss = torch.nn.functional.cross_entropy(output, labels)
         accuracy = accuracy_rate(output, labels)
@@ -118,8 +119,8 @@ class CIFARTrial(PyTorchTrial):
 
     def build_training_data_loader(self) -> Any:
         trainset = self._download_dataset(train=True)
-        return DataLoader(trainset, batch_size=self.context.get_per_slot_batch_size())
+        return DataLoader(trainset, batch_size=4)
 
     def build_validation_data_loader(self) -> Any:
         valset = self._download_dataset(train=False)
-        return DataLoader(valset, batch_size=self.context.get_per_slot_batch_size())
+        return DataLoader(valset, batch_size=4)
