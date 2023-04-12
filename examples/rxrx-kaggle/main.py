@@ -62,7 +62,27 @@ def predict(model, data):
         pickle.dump(output, file)
 
 
-def main():
-    model = ModelAndLoss().cuda()
-    logging.info("Model:\n{}".format(str(model)))
-    # predict(model)
+from cellular_dataset import get_test_loader
+from model import ModelAndLoss
+
+if __name__ == "__main__":
+
+    test_loader = get_test_loader(
+        "/run/determined/workdir/shared_fs/recursion-data",
+        s3_bucket="det-swy-benchmark-us-west-2-573932760021",
+        s3_additional_path="recursion-data",
+        read_from_s3=True,
+    )
+    i = 0
+    for Q in enumerate(test_loader):
+        X = Q[1][0]
+        S = Q[1][1]
+        I = Q[1][2]
+        model = ModelAndLoss()
+        out = model.eval_forward(X, S)
+        print(out.size())
+        print("out")
+        print(out)
+        i = i + 1
+        if i > 0:
+            break
