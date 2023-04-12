@@ -1,5 +1,7 @@
 name: rxrx
-entrypoint: python3 main.py
+entrypoint: >-
+   python3 -m determined.launch.torch_distributed
+   python3 main_dist.py
 
 # NEW: use a non-trivial hyperparameter search.
 searcher:
@@ -8,5 +10,6 @@ searcher:
    max_length:
      records: 1000
 
-
+resources:
+  slots_per_trial: 2
 max_restarts: 0

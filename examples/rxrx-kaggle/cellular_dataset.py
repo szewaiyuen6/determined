@@ -129,7 +129,23 @@ def get_test_loader(
         normalization="sample",
     )
     return DataLoader(
-        test_dataset, 24, shuffle=False, num_workers=1, worker_init_fn=worker_init_fn  # SWY
+        test_dataset, 24, shuffle=False, num_workers=4, worker_init_fn=worker_init_fn  # SWY
+    )
+
+
+def get_all_loader(
+    root_dir, s3_bucket=None, s3_additional_path=None, read_from_s3=False, exclude_leak=False
+):
+    test_dataset = CellularDataset(
+        root_dir,
+        "all",
+        s3_bucket=s3_bucket,
+        s3_additional_path=s3_additional_path,
+        read_from_s3=read_from_s3,
+        normalization="sample",
+    )
+    return DataLoader(
+        test_dataset, 24, shuffle=False, num_workers=4, worker_init_fn=worker_init_fn  # SWY
     )
 
 
@@ -195,36 +211,81 @@ class CellularDataset(Dataset):
             move_controls = False
             all_controls = False
 
-        assert mode in ["train", "val", "test"]
+        assert mode in ["train", "val", "test", "all"]
         self.mode = mode
 
-        csv_file_name = "train.csv" if mode in ["train", "val"] else "test.csv"
-        csv = self._read_csv_to_pd(csv_file_name)
-        csv_controls_file_name = (
-            "train_controls.csv" if mode in ["train", "val"] else "test_controls.csv"
-        )
-        csv_controls = self._read_csv_to_pd(csv_controls_file_name)
+        if mode == "all":
+            train_csv_file_name = "train.csv"
+            train_csv = self._read_csv_to_pd(train_csv_file_name)
+            train_csv["directory"] = "train"
+
+            test_csv_file_name = "test.csv"
+            test_csv = self._read_csv_to_pd(test_csv_file_name)
+            test_csv["directory"] = "test"
+
+            train_csv_controls_file_name = "train_controls.csv"
+            train_csv_controls = self._read_csv_to_pd(train_csv_controls_file_name)
+            train_csv_controls["directory"] = "train"
+
+            test_csv_controls_file_name = "test_controls.csv"
+            test_csv_controls = self._read_csv_to_pd(test_csv_controls_file_name)
+            test_csv_controls["directory"] = "test"
+
+            row_list = chain(
+                train_csv.iterrows(),
+                test_csv.iterrows(),
+                train_csv_controls.iterrows(),
+                test_csv_controls.iterrows(),
+            )
+        else:
+            csv_file_name = "train.csv" if mode in ["train", "val"] else "test.csv"
+            csv = self._read_csv_to_pd(csv_file_name)
+            csv["directory"] = self.mode
+            csv_controls_file_name = (
+                "train_controls.csv" if mode in ["train", "val"] else "test_controls.csv"
+            )
+            csv_controls = self._read_csv_to_pd(csv_controls_file_name)
+            csv_controls["directory"] = self.mode
+            row_list = chain(
+                csv.iterrows(),
+                csv_controls.iterrows(),
+                *([csv_controls_test.iterrows()] if all_controls else []),
+            )
 
         if all_controls:
             csv_controls_test = self._read_csv_to_pd("test_controls.csv")
+
         self.data = []  # (experiment, plate, well, site, cell_type, sirna or None)
         experiments = {}
-        for row in chain(
-            csv.iterrows(),
-            csv_controls.iterrows(),
-            *([csv_controls_test.iterrows()] if all_controls else []),
-        ):
+        for row in row_list:
             r = row[1]
             if r.experiment == "HUVEC-18":
                 # problematic experiment that requires additional processing
                 continue
             typ = r.experiment[: r.experiment.find("-")]
             self.data.append(
-                (r.experiment, r.plate, r.well, 1, typ, r.sirna if hasattr(r, "sirna") else None)
+                (
+                    r.experiment,
+                    r.plate,
+                    r.well,
+                    1,
+                    typ,
+                    r.sirna if hasattr(r, "sirna") else None,
+                    r.directory,
+                )
             )
             self.data.append(
-                (r.experiment, r.plate, r.well, 2, typ, r.sirna if hasattr(r, "sirna") else None)
+                (
+                    r.experiment,
+                    r.plate,
+                    r.well,
+                    2,
+                    typ,
+                    r.sirna if hasattr(r, "sirna") else None,
+                    r.directory,
+                )
             )
+
             if typ not in experiments:
                 experiments[typ] = set()
             experiments[typ].add(r.experiment)
@@ -283,7 +344,7 @@ class CellularDataset(Dataset):
         images = []
         for channel in range(1, 7):
 
-            dir = self.mode
+            dir = d[6]
             local_path_to_dir = self.root / dir / d[0] / "Plate{}".format(d[1])
             local_path_to_file = (
                 self.root
@@ -361,7 +422,7 @@ class CellularDataset(Dataset):
             image = self.transform[1](image)
 
         cell_type = nn.functional.one_hot(
-            torch.tensor(self.cell_types.index(d[-2]), dtype=torch.long), len(self.cell_types)
+            torch.tensor(self.cell_types.index(d[-3]), dtype=torch.long), len(self.cell_types)
         ).float()
 
         r = [image, cell_type, torch.tensor(i, dtype=torch.long)]
