@@ -196,6 +196,8 @@ class CellularDataset(Dataset):
 
         self.mode = mode
 
+        self.default_path_to_file = None
+
         assert normalization in ["global", "experiment", "sample"]
         self.normalization = normalization
 
@@ -380,15 +382,30 @@ class CellularDataset(Dataset):
 
                 if not os.path.exists(local_path_to_dir):
                     os.makedirs(local_path_to_dir)
-                self.s3_client.download_file(self.s3_bucket, file_identifier, local_path_to_file)
 
-            image = PIL.Image.open(local_path_to_file)
+                try:
+                    self.s3_client.download_file(
+                        self.s3_bucket, file_identifier, local_path_to_file
+                    )
+                    image = PIL.Image.open(local_path_to_file)
 
-            # applying grayscale method
-            image = PIL.ImageOps.grayscale(image)
-            images.append(image)
+                    # applying grayscale method
+                    image = PIL.ImageOps.grayscale(image)
+                    images.append(image)
+                    assert images[-1] is not None
+                    if self.default_path_to_file is None:
+                        self.default_path_to_file = local_path_to_file
+                except Exception as e:
+                    print(e)
+                    print(
+                        f"{file_identifier} cannot be download, substituting with default image for benchmarking purpose."
+                    )
+                    image = PIL.Image.open(self.default_path_to_file)
+                    # applying grayscale method
+                    image = PIL.ImageOps.grayscale(image)
+                    images.append(image)
 
-            assert images[-1] is not None
+                    assert images[-1] is not None
 
         image = np.stack(images, axis=-1)
 
