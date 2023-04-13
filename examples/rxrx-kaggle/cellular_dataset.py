@@ -377,12 +377,9 @@ class CellularDataset(Dataset):
                         + "/"
                         + "{}_s{}_w{}.png".format(d[2], d[3], channel)
                     )
-                    s3_path = f"s3://{self.root}/{self.s3_additional_path}/{file_identifier}"
 
                 if not os.path.exists(local_path_to_dir):
                     os.makedirs(local_path_to_dir)
-                print("Download from")
-                print(s3_path)
                 self.s3_client.download_file(self.s3_bucket, file_identifier, local_path_to_file)
 
             image = PIL.Image.open(local_path_to_file)

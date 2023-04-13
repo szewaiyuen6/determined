@@ -50,19 +50,12 @@ class Model(nn.Module):
                 m.momentum = 0.05
 
     def embed(self, x, s):
-        print("inside embed")
         x = self.features(x)
-        print("got features")
         x = F.adaptive_avg_pool2d(x, (1, 1))
-        print("got adaptive_avg_pool2d")
         x = x.view(x.size(0), -1)
-        print("got view")
         if self.concat_cell_type:
-            print("in concat_cell_type")
             x = torch.cat([x, s], dim=1)
-            print("got torch.cat([x, s], dim=1)")
         embedding = self.neck(x)
-        print("got self.neck")
         return embedding
 
     def metric_classify(self, embedding):
@@ -95,11 +88,8 @@ class ModelAndLoss(nn.Module):
         return loss * (1 - coeff) + metric_loss * coeff, acc
 
     def eval_forward(self, x, s):
-        print("inside eval_forward")
         embedding = self.model.embed(x, s)
-        print("got embedding")
         output = self.model.classify(embedding)
-        print("got classify")
         return output
 
     def embed(self, x, s):
