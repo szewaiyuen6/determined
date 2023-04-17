@@ -1,10 +1,9 @@
 import boto3
 import botocore
 import os
-import tempfile
+import pandas as pd
 
 from cellular_dataset import CellularDataset
-from model import ModelAndLoss
 
 import determined as det
 from determined import core
@@ -22,6 +21,7 @@ import json
 import logging
 
 S3_BUCKET = "det-swy-benchmark3-us-west-2-573932760021"
+STORE_INTERVAL = 100
 
 
 def get_data_loader(
@@ -29,17 +29,10 @@ def get_data_loader(
     batch_size,
     total_worker,
     rank,
-    read_from_s3=False,
-    s3_bucket=None,
-    s3_additional_path=None,
 ):
     inference_data = CellularDataset(
         root_dir,
         "test",
-        s3_bucket=s3_bucket,
-        s3_additional_path=s3_additional_path,
-        read_from_s3=read_from_s3,
-        normalization="sample",
     )
     sampler = DistributedSampler(inference_data, total_worker, rank, shuffle=False)
     sampler = torch.utils.data.BatchSampler(sampler, batch_size=batch_size, drop_last=False)
@@ -47,15 +40,30 @@ def get_data_loader(
     return torch.utils.data.DataLoader(inference_data, batch_sampler=sampler)
 
 
-def run_inference(core_context, rank, data_loader, latest_checkpoint):
-    model = ModelAndLoss()
+def run_inference(core_context, rank, data_loader, trial_id, root_dir):
+    model = torch.hub.load("pytorch/vision:v0.10.0", "resnet18", pretrained=True)
     model.eval()
     batch = 0
+
+    store_interval = STORE_INTERVAL
+    output = []
     with torch.no_grad():
-        for i, (X, S, I) in enumerate(data_loader):
-            print(f"batch id is {i}")
-            model.eval_forward(X, S)
+        for i, (X, P) in enumerate(data_loader):
+            print(f"batch {i}")
             batch = batch + 1
+            model(X)
+
+            output.append(P)
+            if (i + 1) % store_interval == 0:
+                print("upload block")
+                filename = f"pred_out_rank_trial_{trial_id}_rank_{rank}_batch_{batch - store_interval + 1}_{batch}"
+                save_pred_output(output, root_dir, filename)
+                output = []
+
+        if len(output) > 0:
+            print("upload last block")
+            filename = f"pred_out_rank_trial_{trial_id}_rank_{rank}_batch_last"
+            save_pred_output(output, root_dir, filename)
 
     if core_context.distributed.rank == 0:
         start_wait = time.time()
@@ -67,6 +75,21 @@ def run_inference(core_context, rank, data_loader, latest_checkpoint):
         core_context.distributed.gather(batch)
         end_wait = time.time()
         return [0, start_wait, end_wait]
+
+
+def save_pred_output(output, root_dir, filename):
+    import csv
+
+    with open(os.path.join(root_dir, filename), "w") as out:
+        csv_out = csv.writer(out)
+        csv_out.writerow(["path"])
+        for tuple in output:
+            for path in tuple:
+                csv_out.writerow([path])
+
+    upload_file(os.path.join(root_dir, filename), S3_BUCKET, f"trial_output/{filename}")
+
+    os.remove(os.path.join(root_dir, filename))
 
 
 def upload_file(file_name, bucket, object_name=None):
@@ -92,7 +115,7 @@ def upload_file(file_name, bucket, object_name=None):
 
 
 def main_from_fs(core_context):
-    batch_size = 50
+    batch_size = 300
     info = det.get_cluster_info()
     total_worker = len(info.container_addrs)
     rank = info.container_rank
@@ -107,11 +130,10 @@ def main_from_fs(core_context):
         batch_size=batch_size,
         total_worker=total_worker,
         rank=rank,
-        read_from_s3=read_from_s3,
     )
     tic = time.time()
     [total_batch_completed, start_wait, end_wait] = run_inference(
-        core_context, rank, data_loader, latest_checkpoint
+        core_context, rank, data_loader, trial_id, root_dir
     )
     toc = time.time()
     if rank == 0:
@@ -136,6 +158,8 @@ def main_from_fs(core_context):
                     "total_batch_completed": total_batch_completed,
                     "batch_size": batch_size,
                     "sync_point_count": 1,
+                    "note": "per image run",
+                    "store_interval": STORE_INTERVAL,
                 },
                 f,
             )
@@ -160,61 +184,12 @@ def main_from_fs(core_context):
                 "total_batch_completed": total_batch_completed,
                 "batch_size": batch_size,
                 "sync_point_count": 1,
+                "note": "per image run",
+                "store_interval": STORE_INTERVAL,
             },
             f,
         )
     upload_file(wait_time_full_file_name, S3_BUCKET, f"benchmark-output/{wait_time_file_name}")
-
-
-def main_with_s3(core_context):
-    batch_size = 50
-    info = det.get_cluster_info()
-    total_worker = len(info.container_addrs)
-    rank = info.container_rank
-    latest_checkpoint = info.latest_checkpoint
-    trial_id = info.trial.trial_id
-    read_from_s3 = True
-
-    with tempfile.TemporaryDirectory() as tmpdirname:
-        data_loader = get_data_loader(
-            root_dir=tmpdirname,
-            batch_size=batch_size,
-            total_worker=total_worker,
-            rank=rank,
-            s3_bucket=S3_BUCKET,
-            s3_additional_path="recursion-data",
-            read_from_s3=read_from_s3,
-        )
-        tic = time.time()
-        total_batch_completed = run_inference(core_context, rank, data_loader, latest_checkpoint)
-        toc = time.time()
-        if rank == 0:
-            file_name = f"benchmark_{trial_id}.json"
-
-            full_filename = os.path.join(tmpdirname, f"{file_name}")
-
-            with open(
-                full_filename,
-                "w",
-            ) as f:
-                json.dump(
-                    {
-                        "job_start_time": tic,
-                        "job_end_time": toc,
-                        "trial_id": trial_id,
-                        "flavor": "det_native",
-                        "master": info.master_url,
-                        "download_from_s3": read_from_s3,
-                        "dataset": "test",
-                        "total_worker": total_worker,
-                        "total_batch_completed": total_batch_completed,
-                        "batch_size": batch_size,
-                        "sync_point_count": 1,
-                    },
-                    f,
-                )
-
-            upload_file(full_filename, S3_BUCKET, f"benchmark-output/{file_name}")
 
 
 def _initialize_distributed_backend() -> Optional[core.DistributedContext]:

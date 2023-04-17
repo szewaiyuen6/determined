@@ -1,0 +1,15 @@
+name: rxrx_image_by_image
+entrypoint: >-
+   python3 -m determined.launch.torch_distributed
+   python3 main_dist.py
+
+# NEW: use a non-trivial hyperparameter search.
+searcher:
+   name: single
+   metric: x
+   max_length:
+     records: 1000
+
+resources:
+  slots_per_trial: 8
+max_restarts: 0

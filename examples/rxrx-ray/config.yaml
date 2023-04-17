@@ -1,0 +1,19 @@
+name: test_ray
+debug: false
+hyperparameters:
+    hp1: 1
+resources:
+  slots_per_trial: 8
+  shm_size: 30000000000
+searcher:
+  name: single
+  metric: loss
+  max_length:
+    batches: 1
+entrypoint:
+  - python3
+  - ray_launcher_2.py
+  - python
+  - main_ray.py
+max_restarts: 0
+checkpoint_policy: none

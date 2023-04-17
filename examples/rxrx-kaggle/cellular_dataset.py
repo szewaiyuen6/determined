@@ -56,67 +56,6 @@ def worker_init_fn(worker_id):
     np.random.seed(random.randint(0, 10 ** 9) + worker_id)
 
 
-def get_train_val_loader(data, predict=False):
-    scale_aug = 0.5
-
-    def train_transform1(image):
-        if random.random() < 0.5:
-            image = image[:, ::-1, :]
-        if random.random() < 0.5:
-            image = image[::-1, :, :]
-        if random.random() < 0.5:
-            image = image.transpose([1, 0, 2])
-        image = np.ascontiguousarray(image)
-
-        # if scale_aug != 1:
-        #     size = random.randint(round(512 * scale_aug), 512)
-        #     x = random.randint(0, 512 - size)
-        #     y = random.randint(0, 512 - size)
-        #     image = image[x:x + size, y:y + size]
-        #     image = cv2.resize(image, (512, 512), interpolation=cv2.INTER_NEAREST)
-
-        return image
-
-    def train_transform2(image):
-        pw_aug = (0.1, 0.1)
-        a, b = np.random.normal(1, pw_aug[0], (6, 1, 1)), np.random.normal(0, pw_aug[1], (6, 1, 1))
-        a, b = torch.tensor(a, dtype=torch.float32), torch.tensor(b, dtype=torch.float32)
-        return image * a + b
-
-    if not predict:
-        train_dataset = CellularDataset(
-            data,
-            "train_all_controls",
-            transform=(train_transform1, train_transform2),
-            cv_number=0,
-            split_seed=0,
-            normalization="sample",
-        )
-        train = DataLoader(
-            train_dataset,
-            24,
-            shuffle=True,
-            drop_last=True,
-            num_workers=10,
-            worker_init_fn=worker_init_fn,
-        )
-
-    for i in range(1 if not predict else 2):
-        dataset = CellularDataset(
-            data, "val" if i == 0 else "train", cv_number=0, split_seed=0, normalization="sample"
-        )
-        loader = DataLoader(
-            dataset, 24, shuffle=False, num_workers=10, worker_init_fn=worker_init_fn
-        )
-        if i == 0:
-            val = loader
-        else:
-            train = loader
-
-    assert len(set(train.dataset.data).intersection(set(val.dataset.data))) == 0
-    return train, val
-
-
 def get_test_loader(
     root_dir, s3_bucket=None, s3_additional_path=None, read_from_s3=False, exclude_leak=False
 ):
@@ -159,10 +98,7 @@ class CellularDataset(Dataset):
         s3_bucket=None,
         s3_additional_path=None,
         read_from_s3=False,
-        split_seed=0,
-        cv_number=0,
         transform=None,
-        normalization="global",
     ):
         """
         :param split_seed: seed for train/val split of labeled experiments and HUVEC-18
@@ -198,19 +134,13 @@ class CellularDataset(Dataset):
 
         self.default_path_to_file = None
 
-        assert normalization in ["global", "experiment", "sample"]
-        self.normalization = normalization
-
         if mode == "train_controls":
             mode = "train"
-            move_controls = True
             all_controls = False
         elif mode == "train_all_controls":
             mode = "train"
-            move_controls = True
             all_controls = True
         else:
-            move_controls = False
             all_controls = False
 
         assert mode in ["train", "val", "test", "all"]
@@ -251,11 +181,7 @@ class CellularDataset(Dataset):
             row_list = chain(
                 csv.iterrows(),
                 csv_controls.iterrows(),
-                *([csv_controls_test.iterrows()] if all_controls else []),
             )
-
-        if all_controls:
-            csv_controls_test = self._read_csv_to_pd("test_controls.csv")
 
         self.data = []  # (experiment, plate, well, site, cell_type, sirna or None)
         experiments = {}
@@ -336,6 +262,20 @@ class CellularDataset(Dataset):
                 f"s3://{self.s3_bucket}/{self.s3_additional_path}/{file_identifier}",
             )
 
+    def export_local_records(self, file_name):
+        for i in range(0, len(self.data)):
+            d = self.data[i]
+            for channel in range(1, 7):
+                dir = d[6]
+                local_path_to_dir = self.root / dir / d[0] / "Plate{}".format(d[1])
+                local_path_to_file = (
+                    self.root
+                    / dir
+                    / d[0]
+                    / "Plate{}".format(d[1])
+                    / "{}_s{}_w{}.png".format(d[2], d[3], channel)
+                )
+
     def __len__(self):
         return len(self.data_indices if self.data_indices is not None else self.data)
 
@@ -356,7 +296,7 @@ class CellularDataset(Dataset):
                 / "{}_s{}_w{}.png".format(d[2], d[3], channel)
             )
 
-            if not local_path_to_file.exists() and self.read_from_s3:
+            if self.read_from_s3:
                 if self.s3_additional_path is None:
                     file_identifier = (
                         dir
@@ -389,10 +329,6 @@ class CellularDataset(Dataset):
                     )
                     image = PIL.Image.open(local_path_to_file)
 
-                    # applying grayscale method
-                    image = PIL.ImageOps.grayscale(image)
-                    images.append(image)
-                    assert images[-1] is not None
                     if self.default_path_to_file is None:
                         self.default_path_to_file = local_path_to_file
                 except Exception as e:
@@ -401,11 +337,23 @@ class CellularDataset(Dataset):
                         f"{file_identifier} cannot be download, substituting with default image for benchmarking purpose."
                     )
                     image = PIL.Image.open(self.default_path_to_file)
-                    # applying grayscale method
-                    image = PIL.ImageOps.grayscale(image)
-                    images.append(image)
 
-                    assert images[-1] is not None
+            else:  # read locally
+                try:
+                    image = PIL.Image.open(local_path_to_file)
+
+                    if self.default_path_to_file is None:
+                        self.default_path_to_file = local_path_to_file
+                except Exception as e:
+                    print(e)
+                    print(
+                        f"{local_path_to_file} cannot be download, substituting with default image for benchmarking purpose."
+                    )
+                    image = PIL.Image.open(self.default_path_to_file)
+
+            image = PIL.ImageOps.grayscale(image)
+            images.append(image)
+            assert images[-1] is not None
 
         image = np.stack(images, axis=-1)
 
@@ -414,21 +362,8 @@ class CellularDataset(Dataset):
 
         image = F.to_tensor(image)
 
-        if self.normalization == "experiment":
-            pixel_mean = torch.tensor(P.pixel_stats[d[0]][0]) / 255
-            pixel_std = torch.tensor(P.pixel_stats[d[0]][1]) / 255
-        elif self.normalization == "global":
-            pixel_mean = (
-                torch.tensor(list(map(lambda x: x[0], P.pixel_stats.values()))).mean(0) / 255
-            )
-            pixel_std = (
-                torch.tensor(list(map(lambda x: x[1], P.pixel_stats.values()))).mean(0) / 255
-            )
-        elif self.normalization == "sample":
-            pixel_mean = image.mean([1, 2])
-            pixel_std = image.std([1, 2]) + 1e-8
-        else:
-            assert 0
+        pixel_mean = torch.tensor(list(map(lambda x: x[0], P.pixel_stats.values()))).mean(0) / 255
+        pixel_std = torch.tensor(list(map(lambda x: x[1], P.pixel_stats.values()))).mean(0) / 255
 
         image = (image - pixel_mean.reshape(-1, 1, 1)) / pixel_std.reshape(-1, 1, 1)
 
