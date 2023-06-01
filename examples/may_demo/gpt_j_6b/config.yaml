@@ -1,0 +1,19 @@
+name: GPT-J-6B-Inference-Demo
+
+entrypoint: >-
+   python3 -m determined.launch.torch_distributed
+   python3 gpt_j_6b_inference.py
+environment:
+  image: szewaiyuendetermined/environments:offload_1
+resources:
+  slots_per_trial: 2
+
+searcher:
+   name: single
+   metric: x
+   max_length: 100
+
+max_restarts: 0
+bind_mounts:
+  - host_path: /tmp
+    container_path: /data
