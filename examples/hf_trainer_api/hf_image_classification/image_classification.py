@@ -299,7 +299,7 @@ def main(det_callback, tb_callback, model_args, data_args, training_args):
         dataset["validation"] = split["test"]
 
     # Prepare label mappings.
-    # We'll include these in the model's config to get human readable labels in the Inference API.
+    # We'll include these in the model's config to get human readable labels in the inference API.
     labels = dataset["train"].features["labels"].names
     label2id, id2label = dict(), dict()
     for i, label in enumerate(labels):

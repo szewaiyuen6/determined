@@ -1,0 +1,22 @@
+
+name: test_grid_new_api
+entrypoint: python3 grid_new_api.py
+searcher:
+  name: grid
+  metric: none
+  max_length: 5 # Number of times the generation pipeline is called, per-worker.
+resources:
+  slots_per_trial: 2 # Also equal to the number of unique initial seeds which will be used.
+  max_slots: 4
+max_restarts: 1
+environment:
+  image: szewaiyuendetermined/environments:offload_1
+hyperparameters:
+    rank:
+      type: int
+      minval: 0
+      maxval: 1
+      count: 2
+    num_replica:
+      type: const
+      val: 2
