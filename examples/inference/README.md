@@ -5,6 +5,8 @@ passing rank and number of replicas to the trial as hyperparameters, when they a
 
 The goal is to showcase limitation of current system to support this paradigm.
 
+Caveat: This example relies on a variation of [this PR](https://github.com/determined-ai/determined/pull/6807) in the `_torch_batch_process_grid.py` file. 
+
 ## Use case
 - Run a LLM (larger than one GPU if running on AWS g4dn12xlarge) with model parallel and cpu offloading with HF 
   Accelerate
