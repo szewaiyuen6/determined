@@ -30,3 +30,7 @@ Caveat: This example relies on a variation of [this PR](https://github.com/deter
   support for cross trial metric aggregation
   - We use the term trial here because it is currently the only contruct we have to run a job. Ideally, we will have
     more generic task / actor construct that better fits what we are actually trying to do here.
+- Hacky set up. The only way to pass in value is via hyperparameter when the values we need are clearly not
+  hyperparameters (e.g. rank, num_replicas)
+- We must use a searcher when we are not really searching. Arguments like max_length, metrics are not relevant but we 
+  need to fill them out nonetheless.
